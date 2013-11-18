@@ -71,8 +71,6 @@ class Cmd cmd where
   --
   -- >>> runShell $ yield (BSC.pack "aaa") >?> cmd "cat > test.file"
   -- <a new file with "aaa" in it>
-
-
   cmdEnv :: Maybe [(String,String)] -> String -> cmd
 
   -- | Like 'cmdEnv' but doesn't set enviorment varaibles
@@ -126,10 +124,8 @@ instance MonadSafe m =>
 -- It provides the direct interface from a shell command string to a proper
 -- 'Pipe'.
 --
--- >>> runShell $ yield (pack "aaa") >?> pipeCmd "tr 'a' 'A'" >-> PBS.stdout
+-- >>> runShell $ yield (BSC.pack "aaa") >?> pipeCmdEnv Nothing "tr 'a' 'A'" >-> PBS.stdout
 -- AAA
---
--- It handles different string types for in and output.
 pipeCmdEnv :: MonadSafe m =>
            Maybe [(String,String)] ->
            String ->

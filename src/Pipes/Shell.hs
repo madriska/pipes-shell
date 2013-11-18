@@ -157,13 +157,12 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
 
   -- *try* to read one line from the chan and yield it.
   yieldOne chan = do
-    isEmpty <- liftIO $ atomically $ isEmptyTBMChan chan
-    unless isEmpty $ do
-      mLine <- liftIO $ atomically $ readTBMChan chan
-      whenJust mLine yield
+    mLine <- liftIO $ atomically $ tryReadTBMChan chan
+    whenJust (join mLine)
+      yield
 
-  -- fill the TChan from the stdout and stderr handles
-  -- the current implementation interleaves stderr and stdout
+  -- fill the TBMChan from the stdout and stderr handles
+  -- the current implementation reads stderr and stdout async
   handlesToChan stdout stderr chan = do
     out <- async $ toTBMChan chan $
            PBS.fromHandle stdout >-> P.map Right

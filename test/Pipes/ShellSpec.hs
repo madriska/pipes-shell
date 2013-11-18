@@ -3,6 +3,7 @@ module Pipes.ShellSpec where
 import qualified Data.ByteString       as BS
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Char
+import           Data.Monoid
 import           Pipes
 import qualified Pipes.Prelude         as P
 import           Pipes.Safe
@@ -49,25 +50,25 @@ collectOutput = runSafeT . P.fold combine ([],[]) fix
                     concatMap (lines . BSC.unpack) out)
 
 trTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
-trTest = yield (BSC.pack "aaa") >?> pipeCmd "tr 'a' 'A'"
+trTest = yield (BSC.pack "aaa") >?> cmd "tr 'a' 'A'"
 
 catEchoTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
 catEchoTest = yield (BSC.pack "out\nput") >?>
-              pipeCmd ("cat > /dev/stdout;" ++
-                       "echo 'err\nor' > /dev/stderr")
+              cmd ("cat > /dev/stdout;" <>
+                   "echo 'err\nor' > /dev/stderr")
 
 envTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
-envTest = yield Nothing >-> pipeCmdEnv env "echo $VARIABLE"
+envTest = cmdEnv env "echo $VARIABLE"
   where
     env = Just [("VARIABLE","value")]
 
 wordsRef :: IO Int
 wordsRef = do
-  (lines':_) <- runSafeT $ P.toListM (producerCmd' "cat /usr/share/dict/words | wc -l")
+  (lines':_) <- runSafeT $ P.toListM $ cmd' "cat /usr/share/dict/words | wc -l"
   return $ read $ BSC.unpack lines'
 
 wordsTest :: IO Int
-wordsTest = runShell $ countNewlines (producerCmd' "cat /usr/share/dict/words")
+wordsTest = runShell $ countNewlines $ cmd' "cat /usr/share/dict/words"
 
 countNewlines :: Monad m => Producer BS.ByteString m () -> m Int
 countNewlines = P.fold countChunk 0 id

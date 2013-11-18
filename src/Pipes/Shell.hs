@@ -2,46 +2,229 @@
 {-# LANGUAGE FlexibleInstances         #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverlappingInstances      #-}
+{-# LANGUAGE RankNTypes                #-}
 {-# LANGUAGE TypeFamilies              #-}
 
 -- | This module contains a few functions to use unix-y shell commands
 -- as 'Pipe's.
+--
+-- The output 'ByteString's from 'pipeCmdEnv' and friends are not line-wise, but chunk-wise. To get proper lines use the pipes-binary and the upcoming pipes-text machinery.
+--
+-- All code examples in this module assume following qualified imports:
+-- Pipes.Prelude as P, Pipes.ByteString as PBS, Data.ByteString.Char8 as BSC
 
 module Pipes.Shell
-  ( Cmd, Cmd'
-  , CmdArg
+  (
 
-  , runShell
-  , (>?>)
-
-  , cmdEnv,         cmd,         cmd'
-  , pipeCmdEnv,     pipeCmd,     pipeCmd'
+  -- * Basic combinators
+    pipeCmdEnv,     pipeCmd,     pipeCmd'
   , producerCmdEnv, producerCmd, producerCmd'
   , consumerCmdEnv, consumerCmd
 
-  , ignoreErr, ignoreOut
+  -- * Fancy overloads
+  , Cmd, Cmd'
+  , cmdEnv,         cmd,         cmd'
+
+  -- * Utils
+  , (>?>)
   , markEnd
+  , ignoreErr, ignoreOut
+  , runShell
   ) where
 
-import           Control.Applicative
-import           Control.Arrow
 import           Control.Monad
-import           Data.Either
 import           Pipes
+import qualified Pipes.ByteString               as PBS
 import           Pipes.Core
-import qualified Pipes.Prelude            as P
-import           Pipes.Safe               hiding (handle)
+import qualified Pipes.Prelude                  as P
+import           Pipes.Safe                     hiding (handle)
 
-import           Control.Concurrent       hiding (yield)
+import           Control.Concurrent             hiding (yield)
 import           Control.Concurrent.Async
 import           Control.Concurrent.STM
-import qualified System.IO                as IO
+import           Control.Concurrent.STM.TBMChan
+import qualified System.IO                      as IO
 import           System.Process
 
-import qualified Data.ByteString          as BS
-import qualified Data.ByteString.Char8    as BSC
-import qualified Data.Text                as T
-import qualified Data.Text.IO             as TIO
+import qualified Data.ByteString                as BS
+
+-- Fancy overloads
+
+-- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmdEnv'
+class Cmd cmd where
+  -- | Like 'pipeCmdEnv', 'producerCmdEnv' or 'consumerCmdEnv' depending on the context.
+  -- It also supports varadic arguments.
+  --
+  -- Examples:
+  --
+  -- As 'Pipe':
+  --
+  -- >>> runShell $ yield (BSC.pack "aaa") >?> cmd "tr 'a' 'A'" >-> ignoreErr >-> PBS.stdout
+  -- AAA
+  --
+  -- As 'Producer':
+  --
+  -- >>> runShell $ cmd "ls" >-> ignoreErr >-> PBS.stdout
+  -- <output from ls on the current directory>
+  --
+  -- As 'Consumer':
+  --
+  -- >>> runShell $ yield (BSC.pack "aaa") >?> cmd "cat > test.file"
+  -- <a new file with "aaa" in it>
+
+
+  cmdEnv :: Maybe [(String,String)] -> String -> cmd
+
+  -- | Like 'cmdEnv' but doesn't set enviorment varaibles
+  cmd :: Cmd cmd => String -> cmd
+  cmd = cmdEnv Nothing
+
+instance Cmd cmd => Cmd (String -> cmd) where
+  cmdEnv env' binary arg = cmdEnv env' $ binary ++ " " ++ arg
+
+instance MonadSafe m =>
+         Cmd (Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()) where
+  cmdEnv = pipeCmdEnv
+
+instance MonadSafe m =>
+         Cmd (Producer (Either BS.ByteString BS.ByteString) m ()) where
+  cmdEnv = producerCmdEnv
+
+instance MonadSafe m =>
+         Cmd (Consumer (Maybe BS.ByteString) m ()) where
+  cmdEnv = consumerCmdEnv
+
+
+-- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmd''.
+-- This class is seperate from 'Cmd' to make the return types work out.
+class Cmd' cmd where
+  -- | Like 'cmd' but uses 'ignoreErr' automatically.
+  -- So it's like 'pipeCmd'', 'producerCmd'' or 'consumerCmd' depending on context.
+  -- It supports the same style of varadic arguments as 'cmd'
+  cmd' :: String -> cmd
+
+instance Cmd' cmd => Cmd' (String -> cmd) where
+  cmd' binary arg = cmd' $ binary ++ " " ++ arg
+
+instance MonadSafe m =>
+         Cmd' (Pipe (Maybe BS.ByteString) BS.ByteString m ()) where
+  cmd' = pipeCmd'
+
+instance MonadSafe m =>
+         Cmd' (Producer BS.ByteString m ()) where
+  cmd' = producerCmd'
+
+instance MonadSafe m =>
+         Cmd' (Consumer (Maybe BS.ByteString) m ()) where
+  cmd' = consumerCmd
+
+
+-- Basic combinators
+
+-- | This is the workhorse of this package.
+--
+-- It provides the direct interface from a shell command string to a proper
+-- 'Pipe'.
+--
+-- >>> runShell $ yield (pack "aaa") >?> pipeCmd "tr 'a' 'A'" >-> PBS.stdout
+-- AAA
+--
+-- It handles different string types for in and output.
+pipeCmdEnv :: MonadSafe m =>
+           Maybe [(String,String)] ->
+           String ->
+           Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
+pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
+  \(stdin, stdout, stderr) -> do
+
+    chan <- liftIO $ newTBMChanIO 4
+    _ <- liftIO $ forkIO $
+      handlesToChan stdout stderr chan
+
+    body stdin chan
+
+  where
+  body stdin chan = do
+    got <- await
+    case got of
+      Nothing -> do
+        liftIO $ IO.hClose stdin
+        fromTBMChan chan
+      Just val -> do
+        liftIO $ BS.hPutStr stdin val
+        yieldOne chan
+        body stdin chan
+
+  -- *try* to read one line from the chan and yield it.
+  yieldOne chan = do
+    isEmpty <- liftIO $ atomically $ isEmptyTBMChan chan
+    unless isEmpty $ do
+      mLine <- liftIO $ atomically $ readTBMChan chan
+      whenJust mLine yield
+
+  -- fill the TChan from the stdout and stderr handles
+  -- the current implementation interleaves stderr and stdout
+  handlesToChan stdout stderr chan = do
+    out <- async $ toTBMChan chan $
+           PBS.fromHandle stdout >-> P.map Right
+
+    err <- async $ toTBMChan chan $
+           PBS.fromHandle stderr >-> P.map Left
+
+    forM_ [out, err] wait
+
+    atomically $ closeTBMChan chan
+
+-- | Like 'pipeCmdEnv' but doesn't set enviorment varaibles
+pipeCmd :: MonadSafe m =>
+           String ->
+           Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
+pipeCmd = pipeCmdEnv Nothing
+
+-- | Like 'pipeCmd' but ignores stderr
+pipeCmd' :: MonadSafe m =>
+           String ->
+           Pipe (Maybe BS.ByteString) BS.ByteString m ()
+pipeCmd' cmdStr = pipeCmd cmdStr >-> ignoreErr
+
+-- | Like 'pipeCmdEnv' but closes the input end immediately.
+--
+-- Useful for command line tools like @ ls @
+producerCmdEnv :: MonadSafe m =>
+              Maybe [(String, String)] ->
+              String ->
+              Producer (Either BS.ByteString BS.ByteString) m ()
+producerCmdEnv env' cmdStr = yield Nothing >-> pipeCmdEnv env' cmdStr
+
+-- | Like 'producerCmdEnv' but doesn't set enviorment varaibles
+producerCmd :: MonadSafe m =>
+              String ->
+              Producer (Either BS.ByteString BS.ByteString) m ()
+producerCmd = producerCmdEnv Nothing
+
+-- | Like 'producerCmd' but ignores stderr
+producerCmd' :: MonadSafe m =>
+              String ->
+              Producer BS.ByteString m ()
+producerCmd' cmdStr = producerCmd cmdStr >-> ignoreErr
+
+-- | Like 'pipeCmd' but closes the output end immediately.
+--
+-- Useful for command line tools like @ cat > test.file @
+consumerCmdEnv:: MonadSafe m =>
+              Maybe [(String,String)] ->
+              String ->
+              Consumer (Maybe BS.ByteString) m ()
+consumerCmdEnv env' cmdStr = pipeCmdEnv env' cmdStr >-> void await
+
+-- | Like 'consumerCmdEnv' but doesn't set enviorment varaibles
+consumerCmd:: MonadSafe m =>
+              String ->
+              Consumer (Maybe BS.ByteString) m ()
+consumerCmd = consumerCmdEnv Nothing
+
+
+-- Utils
 
 -- | Like '>->' but marks the end of the left pipe with 'markEnd'.
 -- It's needed because 'pipeCmdEnv' has to know when the upstream 'Pipe' finishes.
@@ -82,213 +265,36 @@ ignoreOut = forever $ do
     Left x -> yield x
     Right _ -> return ()
 
-linesFromHandle :: MonadIO m => IO.Handle -> Producer BS.ByteString m ()
-linesFromHandle h = go
-  where
-  go = do
-    eof <- liftIO $ IO.hIsEOF h
-    if not eof then do
-      line <- liftIO $ BSC.hGetLine h
-      yield line
-      go
-    else
-      liftIO $ IO.hClose h
+-- | A simple run function for 'Pipe's that live in 'SafeT' 'IO'
+runShell :: Effect (SafeT IO) r -> IO r
+runShell = runSafeT . runEffect
 
-fromTChan :: (MonadIO m) => TChan (Maybe a) -> Producer a m ()
-fromTChan chan = do
-  msg <- liftIO $ atomically $ readTChan chan
+
+
+-- Implementation utils
+
+whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
+whenJust (Just x) action = action x
+whenJust Nothing _ = return ()
+
+fromTBMChan :: (MonadIO m) => TBMChan a -> Producer' a m ()
+fromTBMChan chan = do
+  msg <- liftIO $ atomically $ readTBMChan chan
   whenJust msg $ \m -> do
     yield m
-    fromTChan chan
+    fromTBMChan chan
 
-toTChan :: MonadIO m => TChan a -> Producer a m () -> m ()
-toTChan chan prod = runEffect $
-  for prod (liftIO . atomically . writeTChan chan)
-
--- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmdEnv'
-class Cmd cmd where
-  -- | Like 'pipeCmdEnv', 'producerCmdEnv' or 'consumerCmdEnv' depending on the context.
-  -- It also supports varadic arguments.
-  --
-  -- Examples:
-  --
-  -- As 'Pipe':
-  --
-  -- >>> runShell $ yield "aaa" >?> cmdEnv Nothing "tr" ["a", "A"] >-> ignoreErr >-> P.stdoutLn
-  -- AAA
-  --
-  -- As 'Producer':
-  --
-  -- >>> runShell $ cmdEnv Nothing "ls" >-> ignoreErr >-> P.stdoutLn
-  -- <output from ls on the current directory>
-  --
-  -- As 'Consumer':
-  --
-  -- >>> runShell $ yield "aaa" >?> cmdEnv Nothing "cat > test.file"
-  -- <a new file with "aaa" in it>
-
-
-  cmdEnv :: CmdArg arg => Maybe [(String,String)] -> arg -> cmd
-
-  -- | Like 'cmdEnv' but doesn't set enviorment varaibles
-  cmd :: (Cmd cmd, CmdArg arg) => arg -> cmd
-  cmd = cmdEnv Nothing
-
-instance (Cmd cmd, CmdArg arg) => Cmd (arg -> cmd) where
-  cmdEnv env' binary arg = cmdEnv env' $ toCmdStr binary ++ " " ++ toCmdStr arg
-
-instance (MonadIO (Base m), MonadSafe m) =>
-         Cmd (Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()) where
-  cmdEnv env' = pipeCmdEnv env' . toCmdStr
-
-instance (MonadIO (Base m), MonadSafe m) =>
-         Cmd (Producer (Either BS.ByteString BS.ByteString) m ()) where
-  cmdEnv env' = producerCmdEnv env' . toCmdStr
-
-instance (MonadIO (Base m), MonadSafe m) =>
-         Cmd (Consumer (Maybe BS.ByteString) m ()) where
-  cmdEnv env' = consumerCmdEnv env' . toCmdStr
-
-
--- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmd''
--- This class is seperate from 'Cmd' to make the return types work out.
-class Cmd' cmd where
-  -- | Like 'pipeCmd'', 'producerCmd'' or 'consumerCmd' depending on context.
-  -- It supports the same style of varadic arguments as 'cmd'
-  cmd' :: CmdArg arg => arg -> cmd
-
-instance (Cmd' cmd, CmdArg arg) => Cmd' (arg -> cmd) where
-  cmd' binary arg = cmd' $ toCmdStr binary ++ " " ++ toCmdStr arg
-
-instance (MonadIO (Base m), MonadSafe m) =>
-         Cmd' (Pipe (Maybe BS.ByteString) BS.ByteString m ()) where
-  cmd' = pipeCmd' . toCmdStr
-
-instance (MonadIO (Base m), MonadSafe m) =>
-         Cmd' (Producer BS.ByteString m ()) where
-  cmd' = producerCmd' . toCmdStr
-
-instance (MonadIO (Base m), MonadSafe m) =>
-         Cmd' (Consumer (Maybe BS.ByteString) m ()) where
-  cmd' = consumerCmd . toCmdStr
-
--- | This is the workhorse of this package.
---
--- It provides the direct interface from a shell command string to a proper
--- 'Pipe'.
---
--- >>> runShell $ yield (pack "aaa") >?> pipeCmdEnv Nothing "tr 'a' 'A'"
---            >-> P.map unpack >-> P.stdoutLn
--- AAA
---
--- It handles different string types for in and output.
-pipeCmdEnv :: (MonadIO (Base m), MonadSafe m) =>
-           Maybe [(String,String)] ->
-           String ->
-           Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
-pipeCmdEnv env' cmd = bracket (aquirePipe env' cmd) releasePipe $
-  \(stdin, stdout, stderr) -> do
-
-    chan <- liftIO newTChanIO
-    liftIO $ forkIO $
-      handlesToChan stdout stderr chan
-
-    body stdin chan
-
-  where
-  body stdin chan = do
-    got <- await
-    case got of
-      Nothing -> do
-        liftIO $ IO.hClose stdin
-        yieldRest chan
-      Just val -> do
-        liftIO $ BS.hPutStr stdin val
-        yieldOne chan
-        body stdin chan
-
-  -- TODO: think about joining yieldRest and yieldOne
-  -- yield the whole chan until you're done
-  yieldRest chan = do
-    mLine <- liftIO $ atomically $ readTChan chan
-    whenJust mLine $ \line -> do
-      yield line
-      yieldRest chan
-
-  -- *try* to read one line from the chan and yield it.
-  yieldOne chan = do
-    isEmpty <- liftIO $ atomically $ isEmptyTChan chan
-    unless isEmpty $ do
-      mLine <- liftIO $ atomically $ readTChan chan
-      whenJust mLine yield
-
-  -- fill the TChan from the stdout and stderr handles
-  -- the current implementation interleaves stderr and stdout
-  handlesToChan stdout stderr chan = do
-    out <- async $ toTChan chan $
-           linesFromHandle stdout >-> P.map (Just . Right)
-
-    err <- async $ toTChan chan $
-           linesFromHandle stderr >-> P.map (Just . Left)
-
-    forM_ [out, err] wait
-
-    atomically $ writeTChan chan Nothing
-
--- | Like 'pipeCmdEnv' but doesn't set enviorment varaibles
-pipeCmd :: (MonadIO (Base m), MonadSafe m) =>
-           String ->
-           Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
-pipeCmd = pipeCmdEnv Nothing
-
--- | Like 'pipeCmd' but ignores stdout
-pipeCmd' :: (MonadIO (Base m), MonadSafe m) =>
-           String ->
-           Pipe (Maybe BS.ByteString) BS.ByteString m ()
-pipeCmd' cmd = pipeCmd cmd >-> ignoreErr
-
--- | Like 'pipeCmd' but closes the input end immediately.
---
--- Useful for command line tools like @ ls @
-producerCmdEnv :: (MonadIO (Base m), MonadSafe m) =>
-              Maybe [(String, String)] ->
-              String ->
-              Producer (Either BS.ByteString BS.ByteString) m ()
-producerCmdEnv env' cmd = yield Nothing >-> pipeCmdEnv env' cmd
-
--- | Like 'producerCmdEnv' but doesn't set enviorment varaibles
-producerCmd :: (MonadIO (Base m), MonadSafe m) =>
-              String ->
-              Producer (Either BS.ByteString BS.ByteString) m ()
-producerCmd = producerCmdEnv Nothing
-
--- | Like 'producerCmd' but ignores stderr
-producerCmd' :: (MonadIO (Base m), MonadSafe m) =>
-              String ->
-              Producer BS.ByteString m ()
-producerCmd' cmd = producerCmd cmd >-> ignoreErr
--- | Like 'pipeCmd' but closes the output end immediately.
---
--- Useful for command line tools like @ cat > test.file @
-consumerCmdEnv:: (MonadIO (Base m), MonadSafe m) =>
-              Maybe [(String,String)] ->
-              String ->
-              Consumer (Maybe BS.ByteString) m ()
-consumerCmdEnv env' cmd = pipeCmdEnv env' cmd >-> void await
-
--- | Like 'consumerCmdEnv' but doesn't set enviorment varaibles
-consumerCmd:: (MonadIO (Base m), MonadSafe m) =>
-              String ->
-              Consumer (Maybe BS.ByteString) m ()
-consumerCmd = consumerCmdEnv Nothing
+toTBMChan :: MonadIO m => TBMChan a -> Producer' a m () -> m ()
+toTBMChan chan prod = runEffect $
+  for prod (liftIO . atomically . writeTBMChan chan)
 
 -- | Creates the pipe handles
 aquirePipe :: MonadIO m =>
               Maybe [(String, String)] ->
               String ->
               m (IO.Handle, IO.Handle, IO.Handle)
-aquirePipe env' cmd = liftIO $ do
-  (Just stdin, Just stdout, Just stderr, _) <- createProcess (shellPiped env' cmd)
+aquirePipe env' cmdStr = liftIO $ do
+  (Just stdin, Just stdout, Just stderr, _) <- createProcess (shellPiped env' cmdStr)
   return (stdin, stdout, stderr)
 
 -- | Releases the pipe handles
@@ -300,8 +306,8 @@ releasePipe (stdin, stdout, stderr) = liftIO $ do
 
 -- | Helper function to create the shell pipe handles
 shellPiped :: Maybe [(String, String)] -> String -> CreateProcess
-shellPiped env' cmd = CreateProcess
-    { cmdspec = ShellCommand cmd
+shellPiped env' cmdStr = CreateProcess
+    { cmdspec = ShellCommand cmdStr
     , cwd          = Nothing
     , env          = env'
     , std_in       = CreatePipe
@@ -310,33 +316,3 @@ shellPiped env' cmd = CreateProcess
     , close_fds    = False
     , create_group = False
     }
-
-whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
-whenJust (Just x) action = action x
-whenJust Nothing _ = return ()
-
--- | An ad-hoc typeclass to make 'cmd' work with different string types
--- (in the command line arguments, not in the piped data)
--- This currently needs -XOverlappingInstaces,
--- but this could be solved the same way 'Show' 'String' is handled.
-class CmdArg arg where
-  toCmdStr :: arg -> String
-
-instance CmdArg [Char] where
-  toCmdStr = id
-
-instance CmdArg T.Text where
-  toCmdStr = T.unpack
-
-instance CmdArg BSC.ByteString where
-  toCmdStr = BSC.unpack
-
-instance CmdArg arg => CmdArg [arg] where
-  toCmdStr list = foldr sepBySpace "" strings
-    where
-    strings = map toCmdStr list
-    sepBySpace acc x = acc ++ " " ++ x
-
--- | A simple run function for 'Pipe's that live in 'SafeT' 'IO'
-runShell :: Effect (SafeT IO) r -> IO r
-runShell = runSafeT . runEffect

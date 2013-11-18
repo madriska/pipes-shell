@@ -64,13 +64,13 @@ library
   build-depends:       base >=4.6 && <4.7,
                        stm >=2.4 && <2.5,
                        process >=1.1 && <1.2,
-                       pipes >= 4.0.0,
-                       pipes-safe >= 2.0.0,
+                       pipes >= 4.0.1,
+                       pipes-safe >= 2.0.1,
+                       pipes-bytestring >= 1.0.1,
                        text >= 0.11.3.0,
                        bytestring >= 0.10.0.2,
-                       async >= 2.0.1.0
-                       -- ,
-                       -- stm-chans >= 3.0.0
+                       async >= 2.0.1.0,
+                       stm-chans >= 3.0.0
 
   -- Directories containing source files.
   hs-source-dirs:      src
@@ -92,11 +92,13 @@ test-suite spec
   build-depends:   base >=4.6 && <4.7,
                    stm >=2.4 && <2.5,
                    process >=1.1 && <1.2,
-                   pipes >= 4.0.0,
-                   pipes-safe >= 2.0.0,
+                   pipes >= 4.0.1,
+                   pipes-safe >= 2.0.1,
+                   pipes-bytestring >= 1.0.1,
                    text >= 0.11.3.0,
                    bytestring >= 0.10.0.2,
                    async >= 2.0.1.0,
+                   stm-chans >= 3.0.0,
                    hspec >= 1.7.2.0
 
   -- Directories containing source files.

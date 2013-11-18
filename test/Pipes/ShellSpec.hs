@@ -2,6 +2,7 @@ module Pipes.ShellSpec where
 
 import qualified Data.ByteString       as BS
 import qualified Data.ByteString.Char8 as BSC
+import           Data.Char
 import           Pipes
 import qualified Pipes.Prelude         as P
 import           Pipes.Safe
@@ -10,6 +11,7 @@ import           Test.Hspec
 
 main :: IO ()
 main = hspec $ parallel spec
+
 
 spec :: Spec
 spec = do
@@ -43,8 +45,8 @@ collectOutput = runSafeT . P.fold combine ([],[]) fix
   combine (err, out) (Left x)  = (x:err, out)
   combine (err, out) (Right x) = (err  , x:out)
 
-  fix (err, out) = (map BSC.unpack $ reverse err,
-                    map BSC.unpack $ reverse out)
+  fix (err, out) = (concatMap (lines . BSC.unpack) err,
+                    concatMap (lines . BSC.unpack) out)
 
 trTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
 trTest = yield (BSC.pack "aaa") >?> pipeCmd "tr 'a' 'A'"
@@ -59,10 +61,18 @@ envTest = yield Nothing >-> pipeCmdEnv env "echo $VARIABLE"
   where
     env = Just [("VARIABLE","value")]
 
-wordsTest :: IO String
-wordsTest = fmap show $ runShell $ P.length (producerCmd' "cat /usr/share/dict/words")
-
-wordsRef :: IO String
+wordsRef :: IO Int
 wordsRef = do
   (lines':_) <- runSafeT $ P.toListM (producerCmd' "cat /usr/share/dict/words | wc -l")
-  return $ BSC.unpack lines'
+  return $ read $ BSC.unpack lines'
+
+wordsTest :: IO Int
+wordsTest = runShell $ countNewlines (producerCmd' "cat /usr/share/dict/words")
+
+countNewlines :: Monad m => Producer BS.ByteString m () -> m Int
+countNewlines = P.fold countChunk 0 id
+  where
+  countChunk acc x = acc + BS.foldl' countBS 0 x
+  countBS cnt wrd
+    | wrd == fromIntegral (ord '\n') = cnt + 1
+    | otherwise                      = cnt

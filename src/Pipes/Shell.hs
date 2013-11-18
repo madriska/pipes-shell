@@ -164,11 +164,13 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
   -- fill the TBMChan from the stdout and stderr handles
   -- the current implementation reads stderr and stdout async
   handlesToChan stdout stderr chan = do
-    out <- async $ toTBMChan chan $
+    out <- async $ toTBMChan chan $ do
            PBS.fromHandle stdout >-> P.map Right
+           liftIO $ IO.hClose stdout
 
-    err <- async $ toTBMChan chan $
+    err <- async $ toTBMChan chan $ do
            PBS.fromHandle stderr >-> P.map Left
+           liftIO $ IO.hClose stderr
 
     forM_ [out, err] wait
 

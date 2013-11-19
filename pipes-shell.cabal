@@ -11,6 +11,7 @@ synopsis:             Create proper Pipes from System.Process
 
 -- A longer description of the package.
 description:          This package provide functions to build proper Pipes from Unix shell commands like /tr/, /ls/ or /echo/ in a concise way.
+                      .
                       Build with /cabal configure --enable-tests/ to build the little hspec test.
 
 -- The license under which the package is released.
@@ -58,9 +59,9 @@ library
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:       base >=4.6 && <4.7,
-                       stm >=2.4 && <2.5,
-                       process >=1.1 && <1.2,
+  build-depends:       base >=4.6,
+                       stm >=2.4,
+                       process >=1.1,
                        pipes >= 4.0.1,
                        pipes-safe >= 2.0.1,
                        pipes-bytestring >= 1.0.1,
@@ -86,9 +87,9 @@ test-suite spec
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:   base >=4.6 && <4.7,
-                   stm >=2.4 && <2.5,
-                   process >=1.1 && <1.2,
+  build-depends:   base >=4.6,
+                   stm >=2.4,
+                   process >=1.1,
                    pipes >= 4.0.1,
                    pipes-safe >= 2.0.1,
                    pipes-bytestring >= 1.0.1,

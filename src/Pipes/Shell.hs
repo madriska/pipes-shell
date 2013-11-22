@@ -131,7 +131,7 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
   \(stdin, stdout, stderr) -> do
 
     chan <- liftIO $ newTBMChanIO 4
-    _ <- liftIO $ forkIO $
+    liftIO . forkIO $
       handlesToChan stdout stderr chan
 
     body stdin chan
@@ -205,18 +205,17 @@ producerCmd' cmdStr = producerCmd cmdStr >-> ignoreErr
 -- | Like 'pipeCmd' but closes the output end immediately.
 --
 -- Useful for command line tools like @ cat > test.file @
-consumerCmdEnv:: MonadSafe m =>
+consumerCmdEnv :: MonadSafe m =>
               Maybe [(String,String)] ->
               String ->
               Consumer (Maybe BS.ByteString) m ()
 consumerCmdEnv env' cmdStr = pipeCmdEnv env' cmdStr >-> void await
 
 -- | Like 'consumerCmdEnv' but doesn't set enviorment varaibles
-consumerCmd:: MonadSafe m =>
+consumerCmd :: MonadSafe m =>
               String ->
               Consumer (Maybe BS.ByteString) m ()
 consumerCmd = consumerCmdEnv Nothing
-
 
 -- Utils
 
@@ -269,7 +268,7 @@ runShell = runSafeT . runEffect
 
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenJust (Just x) action = action x
-whenJust Nothing _ = return ()
+whenJust Nothing _       = return ()
 
 fromTBMChan :: (MonadIO m) => TBMChan a -> Producer' a m ()
 fromTBMChan chan = do

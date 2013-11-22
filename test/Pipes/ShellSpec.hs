@@ -10,12 +10,8 @@ import           Pipes.Safe
 import           Pipes.Shell
 import           Test.Hspec
 
-main :: IO ()
-main = hspec $ parallel spec
-
-
 spec :: Spec
-spec = do
+spec = parallel $ do
   describe "features" $ do
     it "works with tr" $ do
       (err, out) <- collectOutput trTest

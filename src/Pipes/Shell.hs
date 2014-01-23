@@ -1,11 +1,13 @@
 {-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE Rank2Types #-}
 
 -- | This module contains a few functions to use unix-y shell commands
 -- as 'Pipe's.
 --
--- The output 'ByteString's from 'pipeCmdEnv' and friends are not line-wise, but chunk-wise. To get proper lines use the pipes-bytestring and the upcoming pipes-text machinery.
+-- The output 'ByteString's from 'pipeCmdEnv' and friends are not line-wise,
+-- but chunk-wise. To get proper lines
+-- use the pipes-bytestring and the upcoming pipes-text machinery.
 --
 -- All code examples in this module assume following qualified imports:
 -- Pipes.Prelude as P, Pipes.ByteString as PBS, Data.ByteString.Char8 as BSC
@@ -49,8 +51,8 @@ import qualified Data.ByteString                as BS
 
 -- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmdEnv'
 class Cmd cmd where
-  -- | Like 'pipeCmdEnv', 'producerCmdEnv' or 'consumerCmdEnv' depending on the context.
-  -- It also supports varadic arguments.
+  -- | Like 'pipeCmdEnv', 'producerCmdEnv' or 'consumerCmdEnv'
+  -- depending on the context. It also supports varadic arguments.
   --
   -- Examples:
   --
@@ -78,15 +80,22 @@ instance Cmd cmd => Cmd (String -> cmd) where
   cmdEnv env' binary arg = cmdEnv env' $ binary ++ " " ++ arg
 
 instance MonadSafe m =>
-         Cmd (Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()) where
+         Cmd (Pipe
+              (Maybe BS.ByteString)
+              (Either BS.ByteString BS.ByteString)
+              m ()) where
   cmdEnv = pipeCmdEnv
 
 instance MonadSafe m =>
-         Cmd (Producer (Either BS.ByteString BS.ByteString) m ()) where
+         Cmd (Producer
+              (Either BS.ByteString BS.ByteString)
+              m ()) where
   cmdEnv = producerCmdEnv
 
 instance MonadSafe m =>
-         Cmd (Consumer (Maybe BS.ByteString) m ()) where
+         Cmd (Consumer
+              (Maybe BS.ByteString)
+              m ()) where
   cmdEnv = consumerCmdEnv
 
 
@@ -220,11 +229,13 @@ consumerCmd = consumerCmdEnv Nothing
 -- Utils
 
 -- | Like '>->' but marks the end of the left pipe with 'markEnd'.
--- It's needed because 'pipeCmdEnv' has to know when the upstream 'Pipe' finishes.
+-- It's needed because 'pipeCmdEnv' has to know when
+-- the upstream 'Pipe' finishes.
 --
 -- The basic rule is:
 --
--- @ Replace every '>->' with '>?>' when it's in front of 'pipeCmdEnv' or similar. @
+-- @ Replace every '>->' with '>?>' when it's in front of
+--   'pipeCmdEnv' or similar. @
 (>?>) :: Monad m =>
      Proxy a' a         () b m r ->
      Proxy () (Maybe b) c' c m r ->
@@ -233,7 +244,8 @@ a >?> b = markEnd a >-> b
 infixl 7 >?>
 
 -- | Mark the end of a pipe.
--- It wraps all values in a 'Just' and yields *one* 'Nothing' after the upstream pipefinished.
+-- It wraps all values in a 'Just' and yields *one* 'Nothing'
+-- after the upstream pipe finished.
 markEnd :: Monad m =>
            Proxy a' a b' b         m r ->
            Proxy a' a b' (Maybe b) m r
@@ -243,7 +255,8 @@ markEnd pipe = do
   return result
 
 -- | Ignore stderr from a 'pipeCmd'
-ignoreErr :: (Monad m) => Pipe (Either BS.ByteString BS.ByteString) BS.ByteString m ()
+ignoreErr :: (Monad m) =>
+             Pipe (Either BS.ByteString BS.ByteString) BS.ByteString m ()
 ignoreErr = forever $ do
   val <- await
   case val of
@@ -287,7 +300,8 @@ aquirePipe :: MonadIO m =>
               String ->
               m (IO.Handle, IO.Handle, IO.Handle)
 aquirePipe env' cmdStr = liftIO $ do
-  (Just stdin, Just stdout, Just stderr, _) <- createProcess (shellPiped env' cmdStr)
+  (Just stdin, Just stdout, Just stderr, _) <-
+    createProcess (shellPiped env' cmdStr)
   return (stdin, stdout, stderr)
 
 -- | Releases the pipe handles

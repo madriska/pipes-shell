@@ -12,46 +12,60 @@ import           Test.Hspec
 
 spec :: Spec
 spec = parallel $ do
+  describe "meta tests" $ do
+    it "collectOutput works as expected" $ do
+      (err, out) <- collectOutput boring
+      out `shouldBe` "1234"
+      err `shouldBe` "abcd"
+
   describe "features" $ do
     it "works with tr" $ do
       (err, out) <- collectOutput trTest
-      out `shouldBe` ["AAA"]
-      err `shouldBe` []
+      out `shouldBe` "AAA"
+      err `shouldBe` ""
 
     it "handles stdout *and* stderr" $ do
       (err, out) <- collectOutput catEchoTest
-      out `shouldBe` ["out", "put"]
-      err `shouldBe` ["err", "or"]
+      out `shouldBe` "out\nput\n"
+      err `shouldBe` "err\nor\n"
 
     it "handles env variables" $ do
       (err, out) <- collectOutput envTest
-      out `shouldBe` ["value"]
-      err `shouldBe` []
+      out `shouldBe` "value\n"
+      err `shouldBe` ""
 
   describe "robustness" $ do
-    it "can handle /usr/share/dict/words" $ do
+    it "can handle /usr/share/dict/*" $ do
       wrds <- wordsTest
       wrdsRef <- wordsRef
       wrds `shouldBe` wrdsRef
 
+boring :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
+boring = each [Left $ BSC.pack "ab",
+               Left $ BSC.pack "cd",
+               Right $ BSC.pack "12",
+               Right $ BSC.pack "34"]
+
+-- collect the output of the pruducer as a (String,String)
+-- these are not [String], because chunking is not really deterministic
 collectOutput ::
   Producer (Either BS.ByteString BS.ByteString) (SafeT IO) () ->
-  IO ([String], [String])
-collectOutput = runSafeT . P.fold combine ([],[]) fix
+  IO (String, String)
+collectOutput = runSafeT . P.fold combine ([],[]) fixUp
   where
-  combine (err, out) (Left x)  = (x:err, out)
-  combine (err, out) (Right x) = (err  , x:out)
+    combine (err, out) (Left x)  = (x:err, out)
+    combine (err, out) (Right x) = (err  , x:out)
 
-  fix (err, out) = (concatMap (lines . BSC.unpack) err,
-                    concatMap (lines . BSC.unpack) out)
+    fixUp (err, out) = (concat $ reverse $ map BSC.unpack err,
+                        concat $ reverse $ map BSC.unpack out)
 
 trTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
 trTest = yield (BSC.pack "aaa") >?> cmd "tr 'a' 'A'"
 
 catEchoTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
-catEchoTest = yield (BSC.pack "out\nput") >?>
-              cmd ("cat > /dev/stdout;" <>
-                   "echo 'err\nor' > /dev/stderr")
+catEchoTest = yield (BSC.pack "out\nput\n") >?>
+               cmd ("cat; " <>
+                    "echo 'err\nor' > /dev/stderr; sync")
 
 envTest :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
 envTest = cmdEnv env "echo $VARIABLE"
@@ -60,16 +74,15 @@ envTest = cmdEnv env "echo $VARIABLE"
 
 wordsRef :: IO Int
 wordsRef = do
-  (lines':_) <- runSafeT $ P.toListM $ cmd' "cat /usr/share/dict/words | wc -l"
+  (lines':_) <- runSafeT $ P.toListM $ cmd' "cat /usr/share/dict/* | wc -l"
   return $ read $ BSC.unpack lines'
 
 wordsTest :: IO Int
-wordsTest = runShell $ countNewlines $ cmd' "cat /usr/share/dict/words"
-
-countNewlines :: Monad m => Producer BS.ByteString m () -> m Int
-countNewlines = P.fold countChunk 0 id
+wordsTest = runShell $ countNewlines $ cmd' "cat /usr/share/dict/*"
   where
-  countChunk acc x = acc + BS.foldl' countBS 0 x
-  countBS cnt wrd
-    | wrd == fromIntegral (ord '\n') = cnt + 1
-    | otherwise                      = cnt
+    -- yay, double fold
+    countNewlines = P.fold countInChunk 0 id
+    countInChunk soFar chunk = soFar + BS.foldl' countInBS 0 chunk
+    countInBS soFar wrd
+      | wrd == fromIntegral (ord '\n') = soFar + 1
+      | otherwise                      = soFar

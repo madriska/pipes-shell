@@ -4,7 +4,7 @@
 -- The name of the package.
 name:                pipes-shell
 
-version:             0.1.0
+version:             0.1.1
 
 -- A short (one-line) description of the package.
 synopsis:             Create proper Pipes from System.Process

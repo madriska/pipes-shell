@@ -8,6 +8,7 @@
 -- The output 'ByteString's from 'pipeCmdEnv' and friends are not line-wise,
 -- but chunk-wise. To get proper lines
 -- use the pipes-bytestring and the upcoming pipes-text machinery.
+-- Note that exit code handling is not yet implemented.
 --
 -- All code examples in this module assume following qualified imports:
 -- Pipes.Prelude as P, Pipes.ByteString as PBS, Data.ByteString.Char8 as BSC

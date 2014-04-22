@@ -140,7 +140,7 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
   \(stdin, stdout, stderr) -> do
 
     chan <- liftIO $ newTBMChanIO 4
-    liftIO . forkIO $
+    _ <- liftIO . forkIO $
       handlesToChan stdout stderr chan
 
     body stdin chan
@@ -322,4 +322,5 @@ shellPiped env' cmdStr = CreateProcess
     , std_err      = CreatePipe
     , close_fds    = False
     , create_group = False
+    , delegate_ctlc = False
     }

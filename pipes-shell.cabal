@@ -10,7 +10,7 @@ version:             0.1.1
 synopsis:             Create proper Pipes from System.Process
 
 -- A longer description of the package.
-description:          This package provide functions to build proper Pipes from Unix shell commands like /tr/, /ls/ or /echo/ in a concise way.
+description:          This package provides functions to build proper Pipes from Unix shell commands like /tr/, /ls/ or /echo/ in a concise way.
                       .
                       Build with /cabal configure --enable-tests/ to build the little hspec test.
 

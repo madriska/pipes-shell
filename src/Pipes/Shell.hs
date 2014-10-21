@@ -42,9 +42,10 @@ import           Pipes.Safe                     hiding (handle)
 import           Control.Concurrent             hiding (yield)
 import           Control.Concurrent.Async
 import           Control.Concurrent.STM
-import           Control.Concurrent.STM.TBMChan
+import           Control.Concurrent.STM.TMChan
 import qualified System.IO                      as IO
 import           System.Process
+import           Debug.Trace
 
 import qualified Data.ByteString                as BS
 
@@ -134,13 +135,13 @@ instance MonadSafe m =>
 -- >>> runShell $ yield (BSC.pack "aaa") >?> pipeCmdEnv Nothing "tr 'a' 'A'" >-> PBS.stdout
 -- AAA
 pipeCmdEnv :: MonadSafe m =>
-           Maybe [(String,String)] ->
-           String ->
-           Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
+    Maybe [(String,String)] ->
+    String ->
+    Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
 pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
   \(stdin, stdout, stderr) -> do
 
-    chan <- liftIO $ newTBMChanIO 4
+    chan <- liftIO $ newTMChanIO
     _ <- liftIO . forkIO $
       handlesToChan stdout stderr chan
 
@@ -152,7 +153,7 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
     case got of
       Nothing -> do
         liftIO $ IO.hClose stdin
-        fromTBMChan chan
+        fromTMChan chan
       Just val -> do
         liftIO $ BS.hPutStr stdin val
         yieldOne chan
@@ -160,24 +161,24 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
 
   -- *try* to read one line from the chan and yield it.
   yieldOne chan = do
-    mLine <- liftIO $ atomically $ tryReadTBMChan chan
+    mLine <- liftIO $ atomically $ tryReadTMChan chan
     whenJust (join mLine)
       yield
 
-  -- fill the TBMChan from the stdout and stderr handles
+  -- fill the TMChan from the stdout and stderr handles
   -- the current implementation reads stderr and stdout async
   handlesToChan stdout stderr chan = do
-    out <- async $ toTBMChan chan $ do
+    out <- async $ toTMChan chan $ do
            PBS.fromHandle stdout >-> P.map Right
            liftIO $ IO.hClose stdout
 
-    err <- async $ toTBMChan chan $ do
+    err <- async $ toTMChan chan $ do
            PBS.fromHandle stderr >-> P.map Left
            liftIO $ IO.hClose stderr
 
     forM_ [out, err] wait
 
-    atomically $ closeTBMChan chan
+    atomically $ closeTMChan chan
 
 -- | Like 'pipeCmdEnv' but doesn't set enviorment varaibles
 pipeCmd :: MonadSafe m =>
@@ -284,16 +285,16 @@ whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenJust (Just x) action = action x
 whenJust Nothing _       = return ()
 
-fromTBMChan :: (MonadIO m) => TBMChan a -> Producer' a m ()
-fromTBMChan chan = do
-  msg <- liftIO $ atomically $ readTBMChan chan
+fromTMChan :: (MonadIO m) => TMChan a -> Producer' a m ()
+fromTMChan chan = do
+  msg <- liftIO $ atomically $ readTMChan chan
   whenJust msg $ \m -> do
     yield m
-    fromTBMChan chan
+    fromTMChan chan
 
-toTBMChan :: MonadIO m => TBMChan a -> Producer' a m () -> m ()
-toTBMChan chan prod = runEffect $
-  for prod (liftIO . atomically . writeTBMChan chan)
+toTMChan :: MonadIO m => TMChan a -> Producer' a m () -> m ()
+toTMChan chan prod = runEffect $
+  for prod (liftIO . atomically . writeTMChan chan)
 
 -- | Creates the pipe handles
 aquirePipe :: MonadIO m =>

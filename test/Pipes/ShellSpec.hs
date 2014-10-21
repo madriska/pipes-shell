@@ -6,39 +6,57 @@ import           Data.Char
 import           Data.Monoid
 import           Pipes
 import qualified Pipes.Prelude         as P
+import qualified Pipes.ByteString      as PBS
 import           Pipes.Safe
 import           Pipes.Shell
 import           Test.Hspec
+import           System.IO
+
+
+import qualified Control.Concurrent as Conc
+import System.Directory
 
 spec :: Spec
 spec = parallel $ do
-  describe "meta tests" $ do
-    it "collectOutput works as expected" $ do
-      (err, out) <- collectOutput boring
-      out `shouldBe` "1234"
-      err `shouldBe` "abcd"
+    describe "meta tests" $ do
+        it "collectOutput works as expected" $ do
+            (err, out) <- collectOutput boring
+            out `shouldBe` "1234"
+            err `shouldBe` "abcd"
 
-  describe "features" $ do
-    it "works with tr" $ do
-      (err, out) <- collectOutput trTest
-      out `shouldBe` "AAA"
-      err `shouldBe` ""
+    describe "features" $ do
+        it "works with tr" $ do
+            (err, out) <- collectOutput trTest
+            out `shouldBe` "AAA"
+            err `shouldBe` ""
 
-    it "handles stdout *and* stderr" $ do
-      (err, out) <- collectOutput catEchoTest
-      out `shouldBe` "out\nput\n"
-      err `shouldBe` "err\nor\n"
+        it "handles stdout *and* stderr" $ do
+            (err, out) <- collectOutput catEchoTest
+            out `shouldBe` "out\nput\n"
+            err `shouldBe` "err\nor\n"
 
-    it "handles env variables" $ do
-      (err, out) <- collectOutput envTest
-      out `shouldBe` "value\n"
-      err `shouldBe` ""
+        it "handles env variables" $ do
+            (err, out) <- collectOutput envTest
+            out `shouldBe` "value\n"
+            err `shouldBe` ""
 
-  describe "robustness" $ do
-    it "can handle /usr/share/dict/*" $ do
-      wrds <- wordsTest
-      wrdsRef <- wordsRef
-      wrds `shouldBe` wrdsRef
+    describe "robustness" $ do
+        it "can handle /usr/share/dict/*" $ do
+            wrds <- wordsTest
+            wrdsRef <- wordsRef
+            wrds `shouldBe` wrdsRef
+
+        it "shouldn't hang on gzip" $ do
+            archivePath <- fmap (++ "/test/numbers.gz") getCurrentDirectory
+            withFile archivePath ReadMode (\h ->
+                runShell $ PBS.fromHandle h >?> pipeCmd' "gzip -d -c" >-> slowConsumer 10000)
+
+  where
+    slowConsumer waitDuration = do
+       _ <- await
+       liftIO $ Conc.threadDelay waitDuration
+       slowConsumer waitDuration
+
 
 boring :: Producer (Either BS.ByteString BS.ByteString) (SafeT IO) ()
 boring = each [Left $ BSC.pack "ab",

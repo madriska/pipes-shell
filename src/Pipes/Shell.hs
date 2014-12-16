@@ -10,8 +10,13 @@
 -- use the pipes-bytestring and the upcoming pipes-text machinery.
 -- Note that exit code handling is not yet implemented.
 --
--- All code examples in this module assume following qualified imports:
--- Pipes.Prelude as P, Pipes.ByteString as PBS, Data.ByteString.Char8 as BSC
+-- All code examples in this module assume the following imports:
+--
+-- @
+-- import Pipes.Prelude as P
+-- import Pipes.ByteString as PBS
+-- import Data.ByteString.Char8 as BSC
+-- @
 
 module Pipes.Shell
   (
@@ -45,16 +50,15 @@ import           Control.Concurrent.STM
 import           Control.Concurrent.STM.TMChan
 import qualified System.IO                      as IO
 import           System.Process
-import           Debug.Trace
 
 import qualified Data.ByteString                as BS
 
 -- Fancy overloads
 
--- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmdEnv'
+-- | An ad-hoc typeclass to get the variadic arguments and DWIM behavior of 'cmdEnv'
 class Cmd cmd where
   -- | Like 'pipeCmdEnv', 'producerCmdEnv' or 'consumerCmdEnv'
-  -- depending on the context. It also supports varadic arguments.
+  -- depending on the context. It also supports variadic arguments.
   --
   -- Examples:
   --
@@ -74,7 +78,7 @@ class Cmd cmd where
   -- <a new file with "aaa" in it>
   cmdEnv :: Maybe [(String,String)] -> String -> cmd
 
-  -- | Like 'cmdEnv' but doesn't set enviorment varaibles
+  -- | Like 'cmdEnv' but doesn't set environment variables
   cmd :: Cmd cmd => String -> cmd
   cmd = cmdEnv Nothing
 
@@ -101,12 +105,12 @@ instance MonadSafe m =>
   cmdEnv = consumerCmdEnv
 
 
--- | An ad-hoc typeclass to get the varadic arguments and DWIM behavoir of 'cmd''.
+-- | An ad-hoc typeclass to get the variadic arguments and DWIM behavoir of 'cmd''.
 -- This class is seperate from 'Cmd' to make the return types work out.
 class Cmd' cmd where
   -- | Like 'cmd' but uses 'ignoreErr' automatically.
   -- So it's like 'pipeCmd'', 'producerCmd'' or 'consumerCmd' depending on context.
-  -- It supports the same style of varadic arguments as 'cmd'
+  -- It supports the same style of variadic arguments as 'cmd'
   cmd' :: String -> cmd
 
 instance Cmd' cmd => Cmd' (String -> cmd) where
@@ -141,7 +145,7 @@ pipeCmdEnv :: MonadSafe m =>
 pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
   \(stdin, stdout, stderr) -> do
 
-    chan <- liftIO $ newTMChanIO
+    chan <- liftIO newTMChanIO
     _ <- liftIO . forkIO $
       handlesToChan stdout stderr chan
 
@@ -180,7 +184,7 @@ pipeCmdEnv env' cmdStr = bracket (aquirePipe env' cmdStr) releasePipe $
 
     atomically $ closeTMChan chan
 
--- | Like 'pipeCmdEnv' but doesn't set enviorment varaibles
+-- | Like 'pipeCmdEnv' but doesn't set environment variables
 pipeCmd :: MonadSafe m =>
            String ->
            Pipe (Maybe BS.ByteString) (Either BS.ByteString BS.ByteString) m ()
@@ -201,7 +205,7 @@ producerCmdEnv :: MonadSafe m =>
               Producer (Either BS.ByteString BS.ByteString) m ()
 producerCmdEnv env' cmdStr = yield Nothing >-> pipeCmdEnv env' cmdStr
 
--- | Like 'producerCmdEnv' but doesn't set enviorment varaibles
+-- | Like 'producerCmdEnv' but doesn't set environment variables
 producerCmd :: MonadSafe m =>
               String ->
               Producer (Either BS.ByteString BS.ByteString) m ()
@@ -222,7 +226,7 @@ consumerCmdEnv :: MonadSafe m =>
               Consumer (Maybe BS.ByteString) m ()
 consumerCmdEnv env' cmdStr = pipeCmdEnv env' cmdStr >-> void await
 
--- | Like 'consumerCmdEnv' but doesn't set enviorment varaibles
+-- | Like 'consumerCmdEnv' but doesn't set environment variables
 consumerCmd :: MonadSafe m =>
               String ->
               Consumer (Maybe BS.ByteString) m ()
@@ -246,7 +250,7 @@ a >?> b = markEnd a >-> b
 infixl 7 >?>
 
 -- | Mark the end of a pipe.
--- It wraps all values in a 'Just' and yields *one* 'Nothing'
+-- It wraps all values in a 'Just' and yields __one__ 'Nothing'
 -- after the upstream pipe finished.
 markEnd :: Monad m =>
            Proxy a' a b' b         m r ->

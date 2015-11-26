@@ -27,7 +27,7 @@ author:              kartoffelbrei
 -- patches.
 maintainer:          kartoffelbrei.mit.muskatnuss@gmail.com
 
-bug-reports: https://github.com/kbrei/pipes-shell/issues
+bug-reports: https://bitbucket.org/kbrei/pipes-shell/issues
 
 
 -- A copyright notice.
@@ -46,7 +46,7 @@ cabal-version:       >=1.10
 
 source-repository head
   type: git
-  location: git://github.com/kbrei/pipes-shell.git
+  location: git://kbrei@bitbucket.org/kbrei/pipes-shell.git
 
 library
   -- Modules exported by the library.

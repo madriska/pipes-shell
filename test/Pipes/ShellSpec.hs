@@ -3,7 +3,6 @@ module Pipes.ShellSpec where
 import qualified Data.ByteString       as BS
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Char
-import           Data.Monoid
 import           Pipes
 import qualified Pipes.Prelude         as P
 import qualified Pipes.ByteString      as PBS
